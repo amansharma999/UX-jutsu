@@ -183,7 +183,7 @@ if userge.has_bot:
 Hello 👋 {from_user.fname},
 Nice To Meet You !, I'm <b>{bot_.fname}</b> A Bot.
 
-        <b><i>Powered by</i> [USERGE-X](https://t.me/xcruzhd2)
+        <b><i>Powered by</i> [Xcruzhd2](https://t.me/xcruzhd2)
 
 My Master is : {owner_.flname}</b>
 """
