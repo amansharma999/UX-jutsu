@@ -1,5 +1,6 @@
 # test build by Kakashi
 
+from pymongo.errors import DuplicateKeyError
 from pyrogram import filters
 from pyrogram.errors import PeerIdInvalid, UsernameInvalid, UsernameNotOccupied
 from pyrogram.raw.base.update import Update
@@ -7,6 +8,7 @@ from pyrogram.raw.types import UpdatePeerBlocked
 from pyrogram.types import Chat, User
 
 from userge import Config, Message, get_collection, userge
+from userge.utils.exceptions import StopConversation
 
 BLOCKED_USERS = get_collection("BLOCKED_USERS")
 LOG_ = userge.getLogger(__name__)
@@ -62,17 +64,21 @@ async def block_ing(message: Message):
                     f"User <b>{user_.first_name}</b> is already blocked.\nDo you want to update the reason? Reply `y` if you want to."
                 )
                 response = await conv.get_response(
-                    mark_read=True, filters=filters.user(Config.OWNER_ID[0])
+                    mark_read=True,
+                    filters=filters.user([Config.OWNER_ID[0], message.from_user.id]),
                 )
-        except TimeoutError:
+        except (TimeoutError, StopConversation):
+            await message.delete()
             return await confirm_.edit(
-                str(confirm_.text) + "\n\n<b>TIMEOUT... block reason is not updated.<b>"
+                "<b>Timeout</b>\nBlock reason is not updated.",
+                del_in=10,
             )
         if response.text not in ["y", "Y"]:
             return
         update_reason = True
     if update_reason:
-        found = await BLOCKED_USERS.find({"_id": user_.id})
+        await confirm_.delete()
+        found = BLOCKED_USERS.find({"_id": user_.id})
         if not found:
             return await message.edit("`Something unexpected happended...`", del_in=5)
         await BLOCKED_USERS.update_one(
@@ -88,11 +94,21 @@ async def block_ing(message: Message):
             },
             "reason": reason_,
         }
-        await BLOCKED_USERS.insert_one(dict_)
+        try:
+            await BLOCKED_USERS.insert_one(dict_)
+            action = ""
+        except DuplicateKeyError:
+            await BLOCKED_USERS.update_one(
+                {"_id": user_.id}, {"$set": {"reason": reason_}}, upsert=True
+            )
         await userge.block_user(user_.id)
         Config.BLOCKED_USERS.append(user_.id)
-        action = ""
+        action = "updated "
     await message.edit(
+        f"User <b>@{user_.username}</b> is blocked with {action}reason <b>{reason_}</b>.",
+        del_in=5,
+    )
+    await CHANNEL.log(
         f"User <b>@{user_.username}</b> is blocked with {action}reason <b>{reason_}</b>."
     )
 
@@ -134,18 +150,20 @@ async def unblock_ing(message: Message):
                 f"User {user_.mention} is blocked with reason <b>{reason_}</b>.\nDo you want to unblock? Reply `y` if you want to."
             )
             response = await conv.get_response(
-                mark_read=True, filters=filters.user(Config.OWNER_ID[0])
+                mark_read=True,
+                filters=filters.user([Config.OWNER_ID[0], message.from_user.id]),
             )
-    except TimeoutError:
-        return await confirm_.edit(
-            str(confirm_.text) + "\n\n<b>TIMEOUT... unblock unsuccessful.<b>"
-        )
+    except (TimeoutError, StopConversation):
+        await message.delete()
+        return await confirm_.edit("<b>Timeout</b>\nUnblock unsuccessful.", del_in=10)
     if response.text not in ["y", "Y"]:
         return
     await BLOCKED_USERS.delete_one({"_id": user_.id})
     Config.BLOCKED_USERS.remove(user_.id)
     await userge.unblock_user(user_.id)
-    await message.edit(f"User <b>@{user_.username}</b> is unblocked now.")
+    await confirm_.delete()
+    await message.edit(f"User <b>@{user_.username}</b> is unblocked now.", del_in=5)
+    await CHANNEL.log(f"User <b>@{user_.username}</b> is unblocked now.")
 
 
 # i'm noob with raw updates, any suggestion to improve the code is welcome
@@ -157,9 +175,13 @@ async def manual_block_unblock(_, update: Update, users: User, chats: Chat):
         user_ = update.peer_id.user_id
         if update.blocked:
             Config.BLOCKED_USERS.append(user_)
+            await BLOCKED_USERS.updated_one(
+                {"_id": user_}, {"$set": {"reason": "Manual block..."}}, upsert=True
+            )
             await CHANNEL.log(f"User <b>{user_}</b> blocked !!!")
         elif update.blocked == False:
             Config.BLOCKED_USERS.remove(user_)
+            await BLOCKED_USERS.delete_one({"_id": user_})
             await CHANNEL.log(f"User <b>{user_}</b> unblocked !!!")
         else:
             pass
@@ -195,5 +217,5 @@ async def v_block_ed(message: Message):
             manual_blocked += f"• `{one}`\n"
             manual_ += 1
     await message.edit(
-        f"{auto_blocked.format(auto_)}\n{manual_blocked.format(manual_)}"
+        f"{auto_blocked.format(auto_)}\n{manual_blocked.format(manual_)}", del_in=15
     )
